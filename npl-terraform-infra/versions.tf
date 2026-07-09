@@ -12,12 +12,13 @@ terraform {
   # Remote state backend (S3, native S3 locking — no DynamoDB table needed).
   # Credentials come from the caller's ambient AWS credentials (SSO profile
   # locally, OIDC-assumed role in CI) — none are hardcoded here.
+  #
+  # Left empty intentionally: a `backend` block can't reference variables
+  # (resolved before any var/local is evaluated), so bucket/key/region live
+  # in backend.hcl instead, supplied via `terraform init -backend-config=backend.hcl`.
+  # Reusing this stack elsewhere: copy backend.hcl, change only its `key` to a
+  # different path in the same bucket — that's a distinct state file, so it
+  # can never collide with or overwrite this stack's state.
   # ---------------------------------------------------------------------------
-  backend "s3" {
-    bucket       = "npl-terraform-infra"
-    key          = "staging/terraform.tfstate"
-    region       = "us-west-2"
-    use_lockfile = true
-    encrypt      = true
-  }
+  backend "s3" {}
 }

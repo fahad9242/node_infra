@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Staging environment values.
+#
+# NOTE: The account (675475398281) is reachable via the "default" SSO profile
+# on this machine — a profile literally named "NPL" is not configured. Set this
+# to "NPL" once you add that profile to ~/.aws/config.
+# ---------------------------------------------------------------------------
+region      = "us-west-2"
+aws_profile = "default"
+
+name_prefix = "cltx-staging-001"
+
+tags = {
+  Project     = "cltx"
+  Environment = "staging"
+  ManagedBy   = "terraform"
+  Owner       = "devops"
+}
+
+# Existing infra lookups (filter by Name tag — no hardcoded IDs)
+vpc_name                    = "vpc_wheelchair_staging"
+public_subnet_name_pattern  = "wheelchair_staging_subnet_public*"
+private_subnet_name_pattern = "wheelchair_staging_subnet_private*"
+
+# ECR
+ecr_repository_name      = "cltx-staging-001-app"
+ecr_image_tag_mutability = "IMMUTABLE"
+ecr_keep_last_images     = 10
+ecr_untagged_expire_days = 14
+
+# S3 (must be globally unique)
+s3_bucket_name = "cltx-staging-001-app-675475398281"
+
+# App / networking
+container_port    = 8080
+health_check_path = "/health"
+
+# Custom domain + TLS (ACM DNS-validated, HTTPS listener, HTTP->HTTPS redirect, ALIAS)
+enable_https      = true
+domain_name       = "cltx-staging.nplhomemedical.app"
+route53_zone_name = "nplhomemedical.app"
+
+# Not needed when enable_https is true (module issues its own cert)
+acm_certificate_arn = ""
+
+# ECS / Fargate
+container_image    = "675475398281.dkr.ecr.us-west-2.amazonaws.com/cltx-staging-001-app:smoketest-v1"
+container_command  = ["--port", "8080"] # traefik/whoami: listen on 8080 to match containerPort
+task_cpu           = 512
+task_memory        = 1024
+desired_count      = 1
+log_retention_days = 30

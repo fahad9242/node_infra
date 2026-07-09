@@ -1,0 +1,198 @@
+name: Deploy
+
+# Order: detect infra changes -> plan -> (gated) apply infra -> verify ->
+# build & push app image -> apply infra again with the new image -> verify
+# the ECS service actually stabilized on it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REPOSITORY: cltx-staging-001-app
+  ECS_CLUSTER: cltx-staging-001-cluster
+  ECS_SERVICE: cltx-staging-001-service
+  TF_DIR: npl-terraform-infra
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect infra changes
+        id: filter
+        run: |
+          BEFORE="${{ github.event.before }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" "${{ github.sha }}" -- "$TF_DIR/"; then
+            echo "infra=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  terraform-plan:
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.0"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -input=false -var-file=staging.tfvars -out=tfplan
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_DIR }}/tfplan
+          retention-days: 1
+
+  terraform-apply:
+    needs: [changes, terraform-plan]
+    if: needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    environment: infra-staging # protected: requires manual approval — see repo Settings > Environments
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.0"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: Download plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: ${{ env.TF_DIR }}
+
+      - name: Terraform apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Verify infra was actually created
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          set -euo pipefail
+          for out in ecs_cluster_name ecs_service_name ecr_repository_url alb_dns_name; do
+            val=$(terraform output -raw "$out")
+            if [ -z "$val" ]; then
+              echo "::error::terraform output '$out' is empty — infra apply did not produce the expected resource"
+              exit 1
+            fi
+            echo "$out = $val"
+          done
+
+  build-and-push:
+    needs: [changes, terraform-plan, terraform-apply]
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        id: image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          IMAGE="$REGISTRY/${{ env.ECR_REPOSITORY }}:$TAG"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+  deploy-app:
+    needs: build-and-push
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.0"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false
+
+      - name: Terraform apply new image
+        working-directory: ${{ env.TF_DIR }}
+        run: |
+          terraform apply -input=false -auto-approve \
+            -var-file=staging.tfvars \
+            -var="container_image=${{ needs.build-and-push.outputs.image }}"
+
+      - name: Wait for ECS service to stabilize
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.ECS_SERVICE }}" \
+            --region "${{ env.AWS_REGION }}"
+
+      - name: Show rollout status
+        if: always()
+        run: |
+          aws ecs describe-services \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.ECS_SERVICE }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --query "services[0].deployments"

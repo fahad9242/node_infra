@@ -150,9 +150,10 @@ jobs:
         id: image
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          # run_attempt makes this unique across re-runs of the same commit —
-          # the ECR repo is IMMUTABLE, so re-pushing the same sha tag fails.
-          TAG: ${{ github.sha }}-${{ github.run_attempt }}
+          # run_id is globally unique across every run of this workflow,
+          # forever — unlike run_attempt (only unique within retries of one
+          # run). The ECR repo is IMMUTABLE, so any repeat tag fails to push.
+          TAG: ${{ github.sha }}-${{ github.run_id }}
         run: |
           set -euo pipefail
           IMAGE="$REGISTRY/${{ env.ECR_REPOSITORY }}:$TAG"

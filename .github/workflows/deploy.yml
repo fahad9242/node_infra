@@ -150,12 +150,13 @@ jobs:
         id: image
         env:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
-          # run_id is globally unique across every run of this workflow,
-          # forever — unlike run_attempt (only unique within retries of one
-          # run). The ECR repo is IMMUTABLE, so any repeat tag fails to push.
-          TAG: ${{ github.sha }}-${{ github.run_id }}
+          SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # Timestamp generated at build time — unique on every actual
+          # execution, not tied to any GitHub run counter. The ECR repo is
+          # IMMUTABLE, so any repeat tag fails to push.
+          TAG="${SHA}-$(date +%s)"
           IMAGE="$REGISTRY/${{ env.ECR_REPOSITORY }}:$TAG"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"

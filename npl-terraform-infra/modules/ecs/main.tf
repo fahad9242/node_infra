@@ -25,6 +25,11 @@ resource "aws_ecs_task_definition" "this" {
   execution_role_arn       = var.task_execution_role_arn
   task_role_arn            = var.task_role_arn
 
+  # Each deploy replaces this resource with a new revision. Without this,
+  # Terraform deregisters the previous revision as part of that replace —
+  # skip_destroy keeps every past revision ACTIVE (visible, rollback-able).
+  skip_destroy = true
+
   container_definitions = jsonencode([
     merge(
       {

@@ -1,0 +1,63 @@
+name: Destroy Infra
+
+# DESTRUCTIVE — tears down every AWS resource this Terraform stack manages
+# (ECS cluster/service, ALB, ACM cert, Route53 record, ECR repo, S3 bucket,
+# IAM roles, security groups). Manual-trigger only — never runs on push.
+# Two independent gates before anything is destroyed: a typed confirmation
+# below, and the infra-staging environment's required-reviewer approval.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" (lowercase, exact) to confirm'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+# Shares the deploy workflow's concurrency group so a destroy can never run
+# at the same time as a plan/apply/deploy against the same state.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+  TF_DIR: npl-terraform-infra
+  # Must match TF_STATE_KEY in deploy.yml exactly — this destroys whatever
+  # state that key points at.
+  TF_STATE_KEY: staging/terraform.tfstate
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    environment: infra-staging # protected: requires manual approval — see repo Settings > Environments
+    steps:
+      - name: Verify typed confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "destroy" ]; then
+            echo "::error::Confirmation input must be exactly 'destroy'. Aborting — nothing was touched."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.13.0"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init -input=false -backend-config=backend.hcl -backend-config="key=${{ env.TF_STATE_KEY }}"
+
+      - name: Terraform destroy
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform destroy -input=false -auto-approve -var-file=staging.tfvars

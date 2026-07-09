@@ -27,7 +27,7 @@ env:
   # backend.hcl for the rest of the backend config). Reusing this workflow
   # for another repo/project: change only this one value to a different
   # path — same bucket, distinct state file, never collides.
-  TF_STATE_KEY: staging/terraform.tfstate
+  TF_STATE_KEY: prod/terraform.tfstate
 
 jobs:
   changes:

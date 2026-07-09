@@ -1,5 +1,10 @@
 resource "aws_s3_bucket" "this" {
   bucket = var.bucket_name
+
+  # Without this, `terraform destroy` fails on a non-empty bucket instead of
+  # tearing down. Versioning is enabled below — force_destroy empties every
+  # version and delete marker too, not just current objects.
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_versioning" "this" {

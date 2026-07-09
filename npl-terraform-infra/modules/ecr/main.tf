@@ -2,6 +2,11 @@ resource "aws_ecr_repository" "this" {
   name                 = var.repository_name
   image_tag_mutability = var.image_tag_mutability
 
+  # Every deploy pushes a new tag (immutable repo), so the repo always has
+  # images by the time anyone runs `terraform destroy` — without this,
+  # destroy fails with RepositoryNotEmptyException instead of tearing down.
+  force_delete = true
+
   image_scanning_configuration {
     scan_on_push = true
   }

@@ -23,6 +23,11 @@ env:
   ECS_CLUSTER: cltx-staging-001-cluster
   ECS_SERVICE: cltx-staging-001-service
   TF_DIR: npl-terraform-infra
+  # State file path within the shared npl-terraform-infra bucket (see
+  # backend.hcl for the rest of the backend config). Reusing this workflow
+  # for another repo/project: change only this one value to a different
+  # path — same bucket, distinct state file, never collides.
+  TF_STATE_KEY: staging/terraform.tfstate
 
 jobs:
   changes:
@@ -64,7 +69,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -input=false -backend-config=backend.hcl
+        run: terraform init -input=false -backend-config=backend.hcl -backend-config="key=${{ env.TF_STATE_KEY }}"
 
       - name: Terraform plan
         working-directory: ${{ env.TF_DIR }}
@@ -97,7 +102,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -input=false -backend-config=backend.hcl
+        run: terraform init -input=false -backend-config=backend.hcl -backend-config="key=${{ env.TF_STATE_KEY }}"
 
       - name: Download plan
         uses: actions/download-artifact@v4
@@ -174,7 +179,7 @@ jobs:
 
       - name: Terraform init
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init -input=false -backend-config=backend.hcl
+        run: terraform init -input=false -backend-config=backend.hcl -backend-config="key=${{ env.TF_STATE_KEY }}"
 
       - name: Terraform apply new image
         working-directory: ${{ env.TF_DIR }}
